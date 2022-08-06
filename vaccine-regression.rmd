@@ -39,13 +39,15 @@ Let's have a cursory look at the data, especially check the distribution of the 
 ### `head()`
 
 ```{r}
-
+data_vac %>% head()
 ```
 
 ### Check the distribution of the output
 
 ```{r}
-
+data_vac %>%
+  ggplot(aes(x = Booster_Doses_18Plus_Vax_Pct)) +
+  geom_density()
 ```
 
 ```{r}
@@ -62,7 +64,11 @@ Let's have a cursory look at the data, especially check the distribution of the 
 
 
 ```{r}
+names(data_vac)
 
+data_vac_use <- data_vac %>%
+  select(Booster_Doses_18Plus_Vax_Pct, Black, Hispanic, IncomePerCap, Poverty, ChildPoverty, Unemployment, pct_trump) %>% 
+  drop_na()
 ```
 
 ## Data preparation
@@ -77,12 +83,31 @@ Using `caret` (or something else if you like), prepare two datasets of pre-proce
 ## Train-test split
 
 ```{r}
+set.seed(20220804) # set seed for reproducability (e.g. today's date...)
 
+train_id <- createDataPartition(
+  data_vac_use$Booster_Doses_18Plus_Vax_Pct,
+  times = 1,
+  p = 0.7,
+  list = F
+)
+
+df_train <- data_vac_use %>% 
+  slice(train_id) # slice over index provided by train_id
+
+df_test <- data_vac_use %>% 
+  slice(-train_id)
 ```
 
 ## Preprocess
 
 ```{r}
+prep <- df_train %>% select(-Booster_Doses_18Plus_Vax_Pct) %>% # the dependant variable (and any dummy variables) should not be included in the preprocessing
+  preProcess(method = c("center", "scale"))
+
+df_train_prepped <- df_train %>% predict(prep, .)
+
+df_test_prepped <- df_test %>% predict(prep, .)
 
 ```
 
@@ -95,13 +120,26 @@ Using `caret` (or something else if you like), prepare two datasets of pre-proce
 - Evaluate the model
 
 ```{r}
+model_lm <- lm(Booster_Doses_18Plus_Vax_Pct ~ ., data = df_train_prepped)
+summary(model_lm)
 
 ```
 ```{r}
+rmse <- function(errors){
+  return((errors^2) %>% mean() %>% sqrt())
+}
 
+pred_train <- predict(model_lm)
+error_train <- pred_train - df_train_prepped$Booster_Doses_18Plus_Vax_Pct
+rmse(error_train)
+
+
+pred_test <- predict(model_lm, newdata = df_test_prepped)
+error_test <- pred_test - df_test_prepped$Booster_Doses_18Plus_Vax_Pct
+rmse(error_test)
 ```
 
-### Additional movel evaluations
+### Additional model evaluations
 
 Using the linear regression model as the baseline we attempt two things:
 
@@ -115,12 +153,37 @@ Using the linear regression model as the baseline we attempt two things:
 
 
 ```{r}
+ctrl <- trainControl(method = "repeatedcv", repeats = 10, number = 5)
+
+model_knn <- train(Booster_Doses_18Plus_Vax_Pct ~ ., 
+                   method = "knn",
+                   data = df_train_prepped, trControl = ctrl)
+
+model_knn # caret automatically chooses candidate values for k, but can be set by hand with tuneGrid
+
+train(Booster_Doses_18Plus_Vax_Pct ~ ., 
+      method = "knn",
+      data = df_train_prepped, trControl = ctrl,
+      tuneGrid = data.frame(k = c(1:10, 20, 30))) # tuneGrid (here for k values) needs to be a data.frame
+
+pred_train <- predict(model_knn)
+error_train <- pred_train - df_train_prepped$Booster_Doses_18Plus_Vax_Pct
+rmse(error_train)
+
+
+pred_test <- predict(model_knn, newdata = df_test_prepped)
+error_test <- pred_test - df_test_prepped$Booster_Doses_18Plus_Vax_Pct
+rmse(error_test) 
+
+# we can see that the RMSE improved with the KNN method
 
 ```
+
 
 ### SVM with Radial Kernel
 
 ```{r}
+
 
 ```
 
@@ -134,6 +197,27 @@ Using the linear regression model as the baseline we attempt two things:
 ### LASSO Outcome
 
 ```{r}
+mat_train_x <- df_train_prepped %>% select(-Booster_Doses_18Plus_Vax_Pct) %>% as.matrix() #glmnet requires a matrix as input
+mat_test_x <- df_test_prepped %>% select(-Booster_Doses_18Plus_Vax_Pct) %>% as.matrix() 
+
+model_lasso <- cv.glmnet(mat_train_x, 
+                         df_train_prepped$Booster_Doses_18Plus_Vax_Pct, #output variable
+                         alpha = 1, # 1 for lasso, if alpha = 0 this runs ridge regression
+                         type.measure = "mse",
+                         family = "gaussian") # family argument is required for glm functions
+
+coef(model_lasso) # glmnet chooses final lambda (and therefore nr of variables) based on increase in RMSE against best model
+plot(model_lasso)
+plot(model_lasso$glmnet.fit, xvar = "lambda")
+
+pred_train <- predict(model_lasso, newx = mat_train_x)
+error_train <- pred_train - df_train_prepped$Booster_Doses_18Plus_Vax_Pct
+rmse(error_train)
+
+pred_test <- predict(model_lasso, newx = mat_test_x)
+error_test <- pred_test - df_test_prepped$Booster_Doses_18Plus_Vax_Pct
+rmse(error_test)
+
 
 ```
 
@@ -142,7 +226,7 @@ Using the linear regression model as the baseline we attempt two things:
 Shrinkage plot of `glmnet` is not informative as it won't show the variable name. Instead you can use `plot_glmnet` in `plotmo` package.
 
 ```{r}
-
+plotmo::plot_glmnet(model_lasso$glmnet.fit, xvar = "lambda")
 ```
 
 
